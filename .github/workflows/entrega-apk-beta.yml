@@ -1,0 +1,166 @@
+name: Entrega verificada del APK BETA original
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: xtreme-entrega-0.1.2-beta.1
+  cancel-in-progress: false
+jobs:
+  publicar:
+    if: github.repository == 'danyjc1109-commits/xtreme-fishing-ai-beta' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Reconstruir, verificar firma y publicar sin recompilar
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: danyjc1109-commits/xtreme-fishing-ai-beta
+        run: |
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import tempfile
+          import urllib.request
+          import zipfile
+          
+          REPO = 'danyjc1109-commits/xtreme-fishing-ai-beta'
+          TAG = 'v0.1.2-beta.1'
+          RELEASE_ID = 415098018
+          APK = 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk'
+          SHA = '3efd7faff609525589b30efe6b70457e2e7c8e36ef45d4b2d3207b6ca13288a4'
+          CERT = 'd7ad46d715d73a1380e7c560cb687f3a5168b0bd0cbaab11a6d381a67b0dfdaa'
+          SIZE = 53103884
+          PARTS = [{'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte001', 'size': 4194304, 'sha256': '8b237cf0e89ca89b6777e4c4c95b83de40b6aec6e41d3e33b56ef81ab1bd2ec2'}, {'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte002', 'size': 4194304, 'sha256': '5a03b5b22507815b6e104dc0efe8f069af283bf1de883065f63c415075ad3eb2'}, {'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte003', 'size': 4194304, 'sha256': '03489f99249d6f8ce440100ef2ad79e686238d7223bdf2161b5a0b2e2c17ee8a'}, {'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte004', 'size': 4194304, 'sha256': '50c2a3fed901d511fad4f23ac96733f93f1295f09e68c8e91bf723dc9f03d678'}, {'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte005', 'size': 4194304, 'sha256': '5606137d13728390d3b93a0e749eaad7fedbc71fc7465d65cf20be9df9ddb213'}, {'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte006', 'size': 4194304, 'sha256': '235d46184184c6bfdeb30eddfe9d2374004b86adf7470f4e38f74a5b6a8826df'}, {'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte007', 'size': 4194304, 'sha256': '3e4af812a17b02d1fc9985abf7f8a5d7120e062fe04bea46de24d3b3ce25e363'}, {'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte008', 'size': 4194304, 'sha256': 'be6f525fa84a9dacccb68e4778e55ec9045855a413b3d344837db36bd74cb8a2'}, {'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte009', 'size': 4194304, 'sha256': '50a4b191a5000232d1472802915c45e3aa53292db0a5e97270bb940b46d1add7'}, {'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte010', 'size': 4194304, 'sha256': 'e3f649234cf790ab118d3169d5b210842d3d70a34ae08d4a794d9bb2620b60a4'}, {'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte011', 'size': 4194304, 'sha256': '2ce2f6bb64403c9279b34c2200c704219eb8e1fa965a6d88510471bd67e5613f'}, {'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte012', 'size': 4194304, 'sha256': '274fdb257fde19edf0a3d21ca17eb9173581e4b18ec0987be09833a26615957c'}, {'name': 'Xtreme-Fishing-AI-BETA-0.1.2-beta.1-release.apk.parte013', 'size': 2772236, 'sha256': 'a46c0205db0f8890df34e54bb5fdfdb202b6fda6af6aa60437efbe2c9988e413'}]
+          API = 'repos/' + REPO + '/releases/' + str(RELEASE_ID)
+          
+          def gh(*args, body=None):
+              run = subprocess.run(['gh', *args], input=json.dumps(body) if body is not None else None,
+                                   text=True, capture_output=True)
+              if run.returncode:
+                  raise RuntimeError('Operacion GitHub fallida: ' + run.stderr.strip()[:900])
+              return run.stdout
+          
+          def api(path, method='GET', body=None):
+              args = ['api', '--method', method, path]
+              if body is not None:
+                  args += ['--input', '-']
+              raw = gh(*args, body=body)
+              return json.loads(raw) if raw.strip() else None
+          
+          def release():
+              data = api(API)
+              if data['id'] != RELEASE_ID or data['tag_name'] != TAG or not data['prerelease']:
+                  raise RuntimeError('Identidad de Release inesperada')
+              allowed = {APK, *(p['name'] for p in PARTS)}
+              if any(a['name'] not in allowed for a in data['assets']):
+                  raise RuntimeError('La Release contiene activos no contemplados por esta entrega')
+              return data
+          
+          def check_file(path):
+              h = hashlib.sha256()
+              with path.open('rb') as stream:
+                  while block := stream.read(1024 * 1024):
+                      h.update(block)
+              if path.stat().st_size != SIZE or h.hexdigest() != SHA:
+                  raise RuntimeError('El APK no coincide con el archivo autorizado')
+              with zipfile.ZipFile(path) as z:
+                  if z.testzip() is not None:
+                      raise RuntimeError('ZIP del APK corrupto')
+                  if any(n.endswith(('.dart', '.p12', '.keystore', '.jks')) or 'kernel_blob' in n for n in z.namelist()):
+                      raise RuntimeError('Contenido no autorizado dentro del APK')
+          
+          def check_signature(path):
+              sdk = Path(os.environ['ANDROID_HOME']) / 'build-tools'
+              tools = [p for p in sdk.iterdir() if (p / 'apksigner').is_file() and (p / 'zipalign').is_file()]
+              if not tools:
+                  raise RuntimeError('Build-tools Android no disponibles')
+              tools.sort(key=lambda p: tuple(int(x) for x in re.findall(r'\d+', p.name)))
+              selected = sdk / '36.0.0' if (sdk / '36.0.0' / 'apksigner').is_file() else tools[-1]
+              result = subprocess.run([str(selected / 'apksigner'), 'verify', '--verbose', '--print-certs', str(path)],
+                                      capture_output=True, text=True, check=True)
+              expected = 'Signer #1 certificate SHA-256 digest: ' + CERT
+              if expected not in result.stdout or 'Number of signers: 1' not in result.stdout:
+                  raise RuntimeError('Certificado de firma distinto del original')
+              if 'Verified using v2 scheme (APK Signature Scheme v2): true' not in result.stdout:
+                  raise RuntimeError('Firma Android v2 no verificada')
+              subprocess.run([str(selected / 'zipalign'), '-c', '-P', '16', '4', str(path)], check=True)
+              print('Firma original y alineacion verificadas; sin usar claves privadas.')
+          
+          if os.environ.get('GITHUB_REPOSITORY') != REPO or os.environ.get('GITHUB_REF') != 'refs/heads/main':
+              raise RuntimeError('Repositorio o rama no autorizados')
+          initial = release()
+          was_draft = initial['draft']
+          if not was_draft and {a['name'] for a in initial['assets']} != {APK}:
+              raise RuntimeError('No se alterara una publicacion existente con activos inesperados')
+          work = Path(tempfile.mkdtemp(prefix='xtreme-entrega-'))
+          promoted = False
+          try:
+              existing = next((a for a in initial['assets'] if a['name'] == APK), None)
+              local_apk = work / APK
+              if existing:
+                  if existing['state'] != 'uploaded' or existing['size'] != SIZE:
+                      raise RuntimeError('APK previo incompleto: detener sin sobrescribirlo')
+                  gh('release', 'download', TAG, '--repo', REPO, '--pattern', APK, '--dir', str(work))
+                  check_file(local_apk)
+              else:
+                  assets = {a['name']: a for a in initial['assets']}
+                  for p in PARTS:
+                      a = assets.get(p['name'])
+                      if a is None or a['size'] != p['size'] or a['state'] != 'uploaded':
+                          raise RuntimeError('Parte ausente o incompleta: ' + p['name'])
+                      if a.get('digest') not in (None, 'sha256:' + p['sha256']):
+                          raise RuntimeError('Hash de parte distinto del autorizado')
+                  folder = work / 'partes'
+                  folder.mkdir()
+                  gh('release', 'download', TAG, '--repo', REPO, '--pattern', APK + '.parte*', '--dir', str(folder))
+                  with local_apk.open('xb') as dst:
+                      for p in PARTS:
+                          data = (folder / p['name']).read_bytes()
+                          if len(data) != p['size'] or hashlib.sha256(data).hexdigest() != p['sha256']:
+                              raise RuntimeError('Parte corrupta: ' + p['name'])
+                          dst.write(data)
+                  check_file(local_apk)
+              check_signature(local_apk)
+              if not existing:
+                  gh('release', 'upload', TAG, str(local_apk), '--repo', REPO)
+              confirmed = work / 'confirmacion'
+              confirmed.mkdir()
+              gh('release', 'download', TAG, '--repo', REPO, '--pattern', APK, '--dir', str(confirmed))
+              check_file(confirmed / APK)
+              latest = release()
+              expected_parts = {p['name'] for p in PARTS}
+              for a in latest['assets']:
+                  if a['name'] in expected_parts:
+                      api('repos/' + REPO + '/releases/assets/' + str(a['id']), method='DELETE')
+              latest = release()
+              if {a['name'] for a in latest['assets']} != {APK}:
+                  raise RuntimeError('No se publicara mientras queden activos temporales')
+              if latest['draft']:
+                  api(API, method='PATCH', body={'draft': False, 'prerelease': True})
+                  promoted = True
+              url = 'https://github.com/' + REPO + '/releases/download/' + TAG + '/' + APK
+              anonymous = work / 'descarga-publica.apk'
+              # urllib no usa GH_TOKEN, cookies ni credenciales del CLI.
+              with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'Xtreme-Fishing-verificacion-publica'}), timeout=120) as response:
+                  if response.status != 200:
+                      raise RuntimeError('Descarga anonima no disponible')
+                  with anonymous.open('xb') as dst:
+                      while block := response.read(1024 * 1024):
+                          dst.write(block)
+              check_file(anonymous)
+              check_signature(anonymous)
+              print('DESCARGA PUBLICA VERIFICADA:', url)
+              summary = os.environ.get('GITHUB_STEP_SUMMARY')
+              if summary:
+                  with open(summary, 'a') as out:
+                      out.write('## Xtreme Fishing AI BETA verificada\n\n' + url + '\n\nSHA-256: `' + SHA + '`\n\nTamano: 53.103.884 bytes. Sin recompilacion; sin fragmentos en la Release.\n')
+          except Exception:
+              if promoted and was_draft:
+                  api(API, method='PATCH', body={'draft': True})
+                  print('La Release vuelve a borrador porque no se completo la verificacion.')
+              raise
